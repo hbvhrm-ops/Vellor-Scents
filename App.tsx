@@ -8,6 +8,39 @@ import CartDrawer from './components/CartDrawer';
 import CheckoutModal from './components/CheckoutModal';
 import AdminDashboard from './components/AdminDashboard';
 
+// Fix: Declare global window properties for Google Identity Services and AI Studio
+// Using a separate interface for AIStudio to avoid conflict with existing global declarations
+declare global {
+  interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
+  }
+  interface Window {
+    google: any;
+    aistudio: AIStudio;
+  }
+}
+
+// Helper to decode Google JWT tokens without external libraries
+function parseJwt(token: string) {
+  try {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(
+      window
+        .atob(base64)
+        .split('')
+        .map(function (c) {
+          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+        })
+        .join('')
+    );
+    return JSON.parse(jsonPayload);
+  } catch (e) {
+    return null;
+  }
+}
+
 const App: React.FC = () => {
   // Persistence for the artisanal collection
   const [perfumes, setPerfumes] = useState<Perfume[]>(() => {
@@ -24,6 +57,7 @@ const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [userRole, setUserRole] = useState<'admin' | 'customer' | null>(null);
   const [userEmail, setUserEmail] = useState('');
+  const [userName, setUserName] = useState('');
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Perfume | null>(null);
   const [isCartOpen, setIsCartOpen] = useState(false);
@@ -32,10 +66,50 @@ const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
+  const googleBtnRef = useRef<HTMLDivElement>(null);
   
   // Login Form State
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+
+  // Initialize Google Sign-In
+  useEffect(() => {
+    if (!isAuthenticated && !isAdminOpen) {
+      const initGoogle = () => {
+        // Fix: accessing google on window now that it's declared in the global scope
+        if (window.google) {
+          window.google.accounts.id.initialize({
+          client_id: "689215905696-2u3eak8vjj1jhlof67qpsrc6iufj9gg1.apps.googleusercontent.com", 
+          callback: handleGoogleCredentialResponse,
+          });
+          if (googleBtnRef.current) {
+            window.google.accounts.id.renderButton(googleBtnRef.current, {
+              theme: "outline",
+              size: "large",
+              text: "continue_with",
+              shape: "rectangular",
+              width: "100%",
+            });
+          }
+        } else {
+          // If script not loaded yet, retry shortly
+          setTimeout(initGoogle, 100);
+        }
+      };
+      initGoogle();
+    }
+  }, [isAuthenticated, isAdminOpen]);
+
+  const handleGoogleCredentialResponse = (response: any) => {
+    const payload = parseJwt(response.credential);
+    if (payload) {
+      setIsAuthenticated(true);
+      setUserRole('customer');
+      setUserEmail(payload.email);
+      setUserName(payload.name || payload.given_name || 'Valued Client');
+      console.log("Logged in as:", payload.email);
+    }
+  };
 
   // Save collection changes
   useEffect(() => {
@@ -90,12 +164,6 @@ const App: React.FC = () => {
     } else {
       alert('The secret key or email provided does not match our archives.');
     }
-  };
-
-  const handleGoogleLogin = () => {
-    setIsAuthenticated(true);
-    setUserRole('customer');
-    setUserEmail('customer@gmail.com'); // Mocked
   };
 
   const addToCart = (perfume: Perfume) => {
@@ -165,13 +233,10 @@ const App: React.FC = () => {
           <p className="text-[10px] tracking-[0.6em] text-[#c5a059] uppercase font-bold mb-12">Private Entrance</p>
           
           <div className="space-y-8">
-            <button 
-              onClick={handleGoogleLogin}
-              className="w-full flex items-center justify-center space-x-4 py-4 border border-gray-200 bg-white hover:bg-gray-50 transition-all rounded-sm shadow-sm group"
-            >
-              <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google" />
-              <span className="text-[10px] font-bold uppercase tracking-widest text-gray-600 group-hover:text-black">Customer Login</span>
-            </button>
+            <div className="flex flex-col items-center">
+              <p className="text-[9px] uppercase tracking-[0.2em] text-gray-400 mb-4 font-bold">Authenticate with Google</p>
+              <div ref={googleBtnRef} className="w-full"></div>
+            </div>
 
             <div className="relative">
               <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-[#dcd0ad]"></div></div>
@@ -196,11 +261,6 @@ const App: React.FC = () => {
                 />
               </div>
               
-              <div className="p-3 bg-black/5 rounded-sm">
-                <p className="text-[8px] uppercase tracking-widest text-gray-400 font-bold mb-1">Testing Credentials</p>
-                <p className="text-[9px] text-gray-500 font-medium">admin@vellorscents.com / VellorAdmin2025</p>
-              </div>
-
               <button 
                 type="submit"
                 className="w-full bg-black text-white py-5 text-[10px] font-bold uppercase tracking-[0.4em] hover:bg-[#c5a059] transition-all shadow-lg active:scale-95"
@@ -220,12 +280,15 @@ const App: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row justify-between items-center h-auto md:h-24 py-4 md:py-0">
             <div className="flex items-center justify-start w-full md:w-1/4 mb-4 md:mb-0">
-              <button 
-                onClick={() => { setIsAuthenticated(false); setUserRole(null); setIsAdminOpen(false); }} 
-                className="text-[9px] font-bold uppercase tracking-[0.3em] text-gray-500 hover:text-black transition-all"
-              >
-                Logout {userRole === 'admin' ? '(Admin)' : ''}
-              </button>
+              <div className="flex flex-col items-start">
+                <button 
+                  onClick={() => { setIsAuthenticated(false); setUserRole(null); setIsAdminOpen(false); }} 
+                  className="text-[9px] font-bold uppercase tracking-[0.3em] text-gray-500 hover:text-black transition-all"
+                >
+                  Logout {userRole === 'admin' ? '(Admin)' : ''}
+                </button>
+                {userName && <span className="text-[8px] uppercase tracking-widest text-[#c5a059] mt-1 font-bold">Welcome, {userName}</span>}
+              </div>
             </div>
 
             <div className="flex flex-col md:flex-row items-center justify-center flex-1 space-y-4 md:space-y-0 md:space-x-12">
